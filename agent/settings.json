@@ -1,0 +1,25 @@
+{
+  "lastChangelogVersion": "0.80.6",
+  "theme": "github-dark-default",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.6-sol",
+  "defaultThinkingLevel": "high",
+  "enabledModels": [
+    "openai-codex/gpt-5.6-sol",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-5.6-terra",
+    "xai/grok-4.5"
+  ],
+  "packages": [
+    "npm:pi-web-access",
+    "npm:pi-vimmode",
+    "npm:@ff-labs/pi-fff"
+  ],
+  "terminal": {
+    "showTerminalProgress": true,
+    "showImages": true,
+    "imageWidthCells": 60
+  },
+  "showHardwareCursor": false,
+  "editorPaddingX": 0
+}

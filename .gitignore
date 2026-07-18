@@ -1,0 +1,19 @@
+# Secrets and machine-local state
+agent/auth.json
+agent/trust.json
+web-search.json
+
+# Installed packages and session transcripts
+agent/npm/
+agent/sessions/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
