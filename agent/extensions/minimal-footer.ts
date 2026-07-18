@@ -133,7 +133,6 @@ export default function minimalFooter(pi: ExtensionAPI) {
 
           const model = ctx.model?.id ?? "no-model";
           const thinkingLevel = pi.getThinkingLevel();
-          const planStatus = footerData.getExtensionStatuses().get("plan-mode");
           const modelText =
             theme.bold(theme.fg("text", model)) +
             (ctx.model?.reasoning
@@ -141,12 +140,12 @@ export default function minimalFooter(pi: ExtensionAPI) {
               : "") +
             (fastMode && isOpenAIModel(ctx.model?.provider)
               ? compactSeparator + theme.fg("warning", "fast")
-              : "") +
-            (planStatus ? compactSeparator + planStatus : "");
+              : "");
           const costText =
             theme.fg("dim", "cost ") + theme.fg("muted", `$${cost.toFixed(3)}`);
 
           const branch = footerData.getGitBranch();
+          const planStatus = footerData.getExtensionStatuses().get("plan-mode");
           const location =
             theme.fg("accent", "◆ ") +
             theme.bold(theme.fg("text", formatDirectory(ctx.cwd))) +
@@ -154,12 +153,29 @@ export default function minimalFooter(pi: ExtensionAPI) {
               ? separator + theme.fg("muted", ` ${branch}`)
               : "");
 
-          const topRight = truncateToWidth(modelText, width, "");
+          const minimumPlanWidth = planStatus ? visibleWidth(planStatus) : 0;
+          const maxTopRightWidth = Math.max(
+            0,
+            width - minimumPlanWidth - (planStatus ? 2 : 0),
+          );
+          const topRight = truncateToWidth(modelText, maxTopRightWidth, "");
           const roomForLocation = width - visibleWidth(topRight) - 2;
-          const topLeft =
-            roomForLocation > 0
-              ? truncateToWidth(location, roomForLocation, theme.fg("dim", "…"))
-              : "";
+          let topLeft = "";
+          if (roomForLocation > 0) {
+            if (!planStatus) {
+              topLeft = truncateToWidth(location, roomForLocation, theme.fg("dim", "…"));
+            } else {
+              const planSuffix = separator + planStatus;
+              if (roomForLocation < visibleWidth(planSuffix)) {
+                topLeft = truncateToWidth(planStatus, roomForLocation, "");
+              } else {
+                const roomForBase = roomForLocation - visibleWidth(planSuffix);
+                topLeft =
+                  truncateToWidth(location, roomForBase, theme.fg("dim", "…")) +
+                  planSuffix;
+              }
+            }
+          }
           const topPadding = " ".repeat(
             Math.max(0, width - visibleWidth(topLeft) - visibleWidth(topRight)),
           );
