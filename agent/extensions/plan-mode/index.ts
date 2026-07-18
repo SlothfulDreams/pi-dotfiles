@@ -12,10 +12,19 @@
  * - Progress tracking widget during execution
  */
 
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.ts";
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Markdown, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import {
+	extractPlanStepSources,
+	extractTodoItems,
+	isSafeCommand,
+	markCompletedSteps,
+	type TodoItem,
+} from "./utils.ts";
 
 // Tools
 const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
@@ -23,11 +32,28 @@ const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
 const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
+interface PlanCardItem {
+	step: number;
+	markdown: string;
+	completed?: boolean;
+}
+
+interface PlanCardData {
+	items: PlanCardItem[];
+	completed?: boolean;
+}
+
 interface PlanModeState {
 	enabled: boolean;
 	todos?: TodoItem[];
 	executing?: boolean;
 	toolsBeforePlanMode?: string[];
+	cardItems?: PlanCardItem[];
+}
+
+interface PendingPlan {
+	items: TodoItem[];
+	cardItems: PlanCardItem[];
 }
 
 // Type guard for assistant messages
@@ -43,16 +69,81 @@ function getTextContent(message: AssistantMessage): string {
 		.join("\n");
 }
 
+function extractPendingPlan(sourceText: string): PendingPlan | undefined {
+	const items = extractTodoItems(sourceText);
+	if (items.length === 0) return undefined;
+
+	return {
+		items,
+		cardItems: extractPlanStepSources(sourceText).map((markdown, index) => ({
+			step: index + 1,
+			markdown,
+		})),
+	};
+}
+
 export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let executionMode = false;
 	let todoItems: TodoItem[] = [];
+	let planCardItems: PlanCardItem[] = [];
+	let pendingPlan: PendingPlan | undefined;
 	let toolsBeforePlanMode: string[] | undefined;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
 		type: "boolean",
 		default: false,
+	});
+
+	pi.registerEntryRenderer<PlanCardData>("plan-todo-list", (entry, _options, theme): Component => {
+		const items = entry.data?.items ?? [];
+		const cardComplete = entry.data?.completed === true;
+		const planAccent = (text: string) => theme.fg(cardComplete ? "success" : "thinkingHigh", text);
+		const title = cardComplete ? " PLAN COMPLETE " : " PLAN ";
+		const markdownItems = items.map((item) => {
+			const body = item.completed ? `~~${item.markdown}~~` : item.markdown;
+			return new Markdown(`${item.step}. ${body}`, 0, 0, getMarkdownTheme());
+		});
+
+		return {
+			invalidate() {
+				for (const item of markdownItems) item.invalidate();
+			},
+			render(width: number): string[] {
+				const cardWidth = Math.min(width, 100);
+				if (cardWidth < 5) {
+					return [truncateToWidth(planAccent("PLAN"), cardWidth, "")];
+				}
+
+				const topBorder =
+					cardWidth >= visibleWidth(title) + 3
+						? `╭─${title}${"─".repeat(cardWidth - visibleWidth(title) - 3)}╮`
+						: `╭${"─".repeat(cardWidth - 2)}╮`;
+				const bottomBorder = `╰${"─".repeat(cardWidth - 2)}╯`;
+				const contentWidth = cardWidth - 4;
+				const lines: string[] = [planAccent(topBorder)];
+
+				const addContentLine = (content: string): void => {
+					const fitted = truncateToWidth(content, contentWidth, "");
+					const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
+					lines.push(
+						planAccent("│") +
+							theme.bg("customMessageBg", ` ${fitted}${padding} `) +
+							planAccent("│"),
+					);
+				};
+
+				addContentLine("");
+				for (const [itemIndex, item] of markdownItems.entries()) {
+					if (itemIndex > 0) addContentLine("");
+					for (const line of item.render(contentWidth)) addContentLine(line);
+				}
+				addContentLine("");
+				lines.push(planAccent(bottomBorder));
+				return lines;
+			},
+		};
 	});
 
 	function updateStatus(ctx: ExtensionContext): void {
@@ -66,16 +157,23 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
 
-		// Widget showing todo list
+		// Compact widget: completed summary, current step, next steps, remainder
 		if (executionMode && todoItems.length > 0) {
-			const lines = todoItems.map((item) => {
-				if (item.completed) {
-					return (
-						ctx.ui.theme.fg("success", "☑ ") + ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-					);
-				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`;
-			});
+			const lines: string[] = [];
+			const completed = todoItems.filter((t) => t.completed).length;
+			if (completed > 0) {
+				lines.push(ctx.ui.theme.fg("success", `☑ ${completed} done`));
+			}
+			const [current, ...upcoming] = todoItems.filter((t) => !t.completed);
+			if (current) {
+				lines.push(ctx.ui.theme.fg("accent", `▶ ${current.step}. `) + current.text);
+			}
+			for (const item of upcoming.slice(0, 2)) {
+				lines.push(ctx.ui.theme.fg("muted", `☐ ${item.step}. ${item.text}`));
+			}
+			if (upcoming.length > 2) {
+				lines.push(ctx.ui.theme.fg("dim", `… ${upcoming.length - 2} more`));
+			}
 			ctx.ui.setWidget("plan-todos", lines);
 		} else {
 			ctx.ui.setWidget("plan-todos", undefined);
@@ -118,17 +216,25 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			todos: todoItems,
 			executing: executionMode,
 			toolsBeforePlanMode,
+			cardItems: planCardItems,
 		});
 	}
 
 	function togglePlanMode(ctx: ExtensionContext): void {
+		const wasExecuting = executionMode;
 		planModeEnabled = !planModeEnabled;
 		executionMode = false;
 		todoItems = [];
+		planCardItems = [];
+		pendingPlan = undefined;
 
 		if (planModeEnabled) {
 			enablePlanModeTools();
-			ctx.ui.notify("Plan mode enabled. Built-in write tools disabled.");
+			ctx.ui.notify(
+				wasExecuting
+					? "Plan execution cancelled. Plan mode enabled."
+					: "Plan mode enabled. Built-in write tools disabled.",
+			);
 		} else {
 			restoreNormalModeTools();
 			ctx.ui.notify("Plan mode disabled. Full access restored.");
@@ -143,14 +249,20 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("todos", {
-		description: "Show current plan todo list",
+		description: "Show current plan progress card",
 		handler: async (_args, ctx) => {
 			if (todoItems.length === 0) {
 				ctx.ui.notify("No todos. Create a plan first with /plan", "info");
 				return;
 			}
-			const list = todoItems.map((item, i) => `${i + 1}. ${item.completed ? "✓" : "○"} ${item.text}`).join("\n");
-			ctx.ui.notify(`Plan Progress:\n${list}`, "info");
+			pi.appendEntry<PlanCardData>("plan-todo-list", {
+				items: todoItems.map((item, index) => ({
+					step: item.step,
+					markdown: planCardItems[index]?.markdown ?? item.text,
+					completed: item.completed,
+				})),
+				completed: todoItems.every((item) => item.completed),
+			});
 		},
 	});
 
@@ -172,9 +284,24 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	// Filter out stale plan mode context when not in plan mode
+	// Deduplicate plan mode context while active; strip it entirely when inactive
 	pi.on("context", async (event) => {
-		if (planModeEnabled) return;
+		if (planModeEnabled) {
+			// Keep only the most recent plan-mode context injection to save tokens.
+			let lastContextIndex = -1;
+			for (let i = event.messages.length - 1; i >= 0; i--) {
+				if ((event.messages[i] as AgentMessage & { customType?: string }).customType === "plan-mode-context") {
+					lastContextIndex = i;
+					break;
+				}
+			}
+			const messages = event.messages.filter(
+				(m, index) =>
+					(m as AgentMessage & { customType?: string }).customType !== "plan-mode-context" ||
+					index === lastContextIndex,
+			);
+			return messages.length === event.messages.length ? undefined : { messages };
+		}
 
 		return {
 			messages: event.messages.filter((m) => {
@@ -199,6 +326,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	// Inject plan/execution context before agent starts
 	pi.on("before_agent_start", async () => {
 		if (planModeEnabled) {
+			const currentPlan =
+				todoItems.length > 0
+					? `\n\nCurrent plan available for refinement:\n${todoItems
+							.map((item) => `${item.step}. ${item.text}`)
+							.join("\n")}`
+					: "";
 			return {
 				message: {
 					customType: "plan-mode-context",
@@ -220,7 +353,7 @@ Plan:
 2. Second step description
 ...
 
-Do NOT attempt to make changes - just describe what you would do.`,
+Do NOT attempt to make changes - just describe what you would do.${currentPlan}`,
 					display: false,
 				},
 			};
@@ -237,12 +370,33 @@ Do NOT attempt to make changes - just describe what you would do.`,
 Remaining steps:
 ${todoList}
 
-Execute each step in order.
-After completing a step, include a [DONE:n] tag in your response.`,
+Work on exactly one step at a time, in order.
+The moment a step is finished, output its [DONE:n] tag in that same turn's text before moving to the next step.
+Do NOT batch [DONE:n] tags into the final message - report each one as it happens.`,
 					display: false,
 				},
 			};
 		}
+	});
+
+	// Capture completed plans before rendering so the unboxed assistant text can
+	// be replaced by the bordered card without losing the full plan content.
+	pi.on("message_end", async (event, ctx) => {
+		// Without a UI there is no card to replace the text, so leave the plan visible.
+		if (!ctx.hasUI || !planModeEnabled || executionMode || !isAssistantMessage(event.message)) return;
+
+		const extracted = extractPendingPlan(getTextContent(event.message));
+		if (!extracted) return;
+
+		pendingPlan = extracted;
+		return {
+			message: {
+				...event.message,
+				content: event.message.content.map((block) =>
+					block.type === "text" ? { ...block, text: "" } : block,
+				),
+			},
+		};
 	});
 
 	// Track progress after each turn
@@ -253,8 +407,8 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		const text = getTextContent(event.message);
 		if (markCompletedSteps(text, todoItems) > 0) {
 			updateStatus(ctx);
+			persistState();
 		}
-		persistState();
 	});
 
 	// Handle plan completion and plan mode UI
@@ -262,13 +416,18 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		// Check if execution is complete
 		if (executionMode && todoItems.length > 0) {
 			if (todoItems.every((t) => t.completed)) {
-				const completedList = todoItems.map((t) => `~~${t.text}~~`).join("\n");
-				pi.sendMessage(
-					{ customType: "plan-complete", content: `**Plan Complete!** ✓\n\n${completedList}`, display: true },
-					{ triggerTurn: false },
-				);
+				// Render a green completion card matching the plan card style.
+				pi.appendEntry<PlanCardData>("plan-todo-list", {
+					items: todoItems.map((item, index) => ({
+						step: item.step,
+						markdown: planCardItems[index]?.markdown ?? item.text,
+						completed: true,
+					})),
+					completed: true,
+				});
 				executionMode = false;
 				todoItems = [];
+				planCardItems = [];
 				updateStatus(ctx);
 				persistState(); // Save cleared state so resume doesn't restore old execution mode
 			}
@@ -277,30 +436,32 @@ After completing a step, include a [DONE:n] tag in your response.`,
 
 		if (!planModeEnabled || !ctx.hasUI) return;
 
-		// Extract todos from last assistant message
-		const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-		if (lastAssistant) {
-			const extracted = extractTodoItems(getTextContent(lastAssistant));
-			if (extracted.length > 0) {
-				todoItems = extracted;
-			}
+		// Use the plan captured before display replacement, with a fallback for
+		// modes where message replacement is unavailable. Do not reuse stale todos
+		// when a response does not contain a new plan.
+		let nextPlan: PendingPlan | undefined;
+		if (pendingPlan) {
+			nextPlan = pendingPlan;
+			pendingPlan = undefined;
+		} else {
+			const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+			if (lastAssistant) nextPlan = extractPendingPlan(getTextContent(lastAssistant));
 		}
 
-		if (todoItems.length === 0) return;
+		if (!nextPlan) return;
+		todoItems = nextPlan.items;
+		planCardItems = nextPlan.cardItems;
 		persistState();
 
-		// Show plan steps and prompt for next action
-		const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
-		const planTodoListMessage = {
-			customType: "plan-todo-list",
-			content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
-			display: true,
-		};
+		pi.appendEntry<PlanCardData>("plan-todo-list", {
+			items: nextPlan.cardItems,
+		});
 
 		const choice = await ctx.ui.select("Plan mode - what next?", [
 			"Execute the plan (track progress)",
 			"Stay in plan mode",
 			"Refine the plan",
+			"Save plan to PLAN.md",
 		]);
 
 		if (choice?.startsWith("Execute")) {
@@ -320,17 +481,26 @@ Remaining steps:
 ${remainingList}
 
 Start with: ${firstTodoItem.text}
-After completing a step, include a [DONE:n] tag in your response.`;
-			pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
+Work on exactly one step at a time, in order.
+The moment a step is finished, output its [DONE:n] tag in that same turn's text before moving to the next step.
+Do NOT batch [DONE:n] tags into the final message - report each one as it happens.`;
 			pi.sendMessage(
-				{ customType: "plan-mode-execute", content: execMessage, display: true },
+				{ customType: "plan-mode-execute", content: execMessage, display: false },
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		} else if (choice === "Refine the plan") {
 			const refinement = await ctx.ui.editor("Refine the plan:", "");
 			if (refinement?.trim()) {
-				pi.sendMessage(planTodoListMessage, { deliverAs: "followUp" });
 				pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
+			}
+		} else if (choice === "Save plan to PLAN.md") {
+			const planPath = join(ctx.cwd, "PLAN.md");
+			const content = `# Plan\n\n${nextPlan.cardItems.map((item) => `${item.step}. ${item.markdown}`).join("\n")}\n`;
+			try {
+				writeFileSync(planPath, content, "utf8");
+				ctx.ui.notify(`Plan saved to ${planPath}`, "info");
+			} catch (error) {
+				ctx.ui.notify(`Failed to save plan: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}
 		}
 	});
@@ -353,6 +523,7 @@ After completing a step, include a [DONE:n] tag in your response.`;
 			todoItems = planModeEntry.data.todos ?? todoItems;
 			executionMode = planModeEntry.data.executing ?? executionMode;
 			toolsBeforePlanMode = planModeEntry.data.toolsBeforePlanMode ?? toolsBeforePlanMode;
+			planCardItems = planModeEntry.data.cardItems ?? planCardItems;
 		}
 
 		// On resume: re-scan messages to rebuild completion state

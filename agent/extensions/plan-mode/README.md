@@ -7,14 +7,17 @@ Read-only exploration mode for safe code analysis.
 - **Built-in write tools disabled**: Disables edit/write while preserving other active tools
 - **Bash allowlist**: Only read-only bash commands are allowed
 - **Plan extraction**: Extracts numbered steps from `Plan:` sections
-- **Progress tracking**: Widget shows completion status during execution
+- **Bordered plan card**: Shows the complete plan once in a spacious purple box with markdown styling
+- **Completion card**: Green bordered card with struck-through steps when the plan finishes
+- **Compact progress widget**: Shows done count, current step, and next steps during execution
+- **Save to file**: Optional `PLAN.md` export from the decision dialog
 - **[DONE:n] markers**: Explicit step completion tracking
 - **Session persistence**: State survives session resume
 
 ## Commands
 
 - `/plan` - Toggle plan mode
-- `/todos` - Show current plan progress
+- `/todos` - Render the current plan progress card
 - `Shift+Tab` - Toggle between plan and regular mode (shortcut)
 
 ## Usage
@@ -30,7 +33,7 @@ Plan:
 3. Third step description
 ```
 
-4. Choose "Execute the plan" when prompted
+4. Review the bordered plan card and choose: execute, stay, refine, or save to `PLAN.md`
 5. During execution, the agent marks steps complete with `[DONE:n]` tags
 6. Progress widget shows completion status
 
