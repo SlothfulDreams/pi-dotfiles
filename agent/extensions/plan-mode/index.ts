@@ -5,7 +5,7 @@
  * When enabled, built-in write tools are disabled.
  *
  * Features:
- * - /plan command or Ctrl+Alt+P to toggle
+ * - /plan command or Shift+Tab to toggle
  * - Bash restricted to allowlisted read-only commands
  * - Extracts numbered plan steps from "Plan:" sections
  * - [DONE:n] markers to complete steps during execution
@@ -15,7 +15,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key } from "@earendil-works/pi-tui";
 import { extractTodoItems, isSafeCommand, markCompletedSteps, type TodoItem } from "./utils.ts";
 
 // Tools
@@ -155,8 +154,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerShortcut(Key.ctrlAlt("p"), {
-		description: "Toggle plan mode",
+	pi.registerShortcut("shift+tab", {
+		description: "Toggle between plan and regular mode",
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
