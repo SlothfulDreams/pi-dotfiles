@@ -133,6 +133,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
 
           const model = ctx.model?.id ?? "no-model";
           const thinkingLevel = pi.getThinkingLevel();
+          const planStatus = footerData.getExtensionStatuses().get("plan-mode");
           const modelText =
             theme.bold(theme.fg("text", model)) +
             (ctx.model?.reasoning
@@ -141,7 +142,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
             (fastMode && isOpenAIModel(ctx.model?.provider)
               ? compactSeparator + theme.fg("warning", "fast")
               : "") +
-            "";
+            (planStatus ? compactSeparator + planStatus : "");
           const costText =
             theme.fg("dim", "cost ") + theme.fg("muted", `$${cost.toFixed(3)}`);
 
