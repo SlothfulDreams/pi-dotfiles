@@ -28,6 +28,15 @@ export default function minimalFooter(pi: ExtensionAPI) {
     return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
   }
 
+  // Live counter format: whole seconds, like Claude Code's working timer.
+  function formatElapsed(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1_000);
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+  }
+
   const isOpenAIModel = (provider: string | undefined) =>
     provider === "openai" || provider === "openai-codex";
 
@@ -79,14 +88,19 @@ export default function minimalFooter(pi: ExtensionAPI) {
   pi.on("agent_start", (_event, ctx) => {
     if (!ctx.hasUI) return;
 
+    // Only set the start time on the first agent_start of a settled-to-settled
+    // cycle. Retries, compaction runs, and queued follow-ups fire agent_start
+    // again, but the elapsed time should accumulate continuously.
+    if (agentStartedAt === undefined) agentStartedAt = Date.now();
     if (workTimer) clearInterval(workTimer);
-    agentStartedAt = Date.now();
     const updateWorkingTime = () => {
       if (agentStartedAt === undefined) return;
-      ctx.ui.setWorkingMessage(`Working... ${formatDuration(Date.now() - agentStartedAt)}`);
+      ctx.ui.setWorkingMessage(`Working... ${formatElapsed(Date.now() - agentStartedAt)}`);
     };
     updateWorkingTime();
-    workTimer = setInterval(updateWorkingTime, 100);
+    // Tick faster than 1s so the whole-second display never visibly stalls
+    // when the interval is re-created mid-second on retries/follow-ups.
+    workTimer = setInterval(updateWorkingTime, 250);
   });
 
   pi.on("agent_settled", (_event, ctx) => {

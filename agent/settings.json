@@ -5,10 +5,12 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "high",
   "enabledModels": [
-    "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-luna",
     "openai-codex/gpt-5.6-terra",
-    "xai/grok-4.5"
+    "xai/grok-4.5",
+    "anthropic/claude-fable-5",
+    "anthropic/claude-opus-4-8",
+    "openai-codex/gpt-5.6-sol"
   ],
   "packages": [
     "npm:pi-web-access",
@@ -21,5 +23,7 @@
     "imageWidthCells": 60
   },
   "showHardwareCursor": false,
-  "editorPaddingX": 0
+  "editorPaddingX": 0,
+  "showCacheMissNotices": false,
+  "steeringMode": "one-at-a-time"
 }
