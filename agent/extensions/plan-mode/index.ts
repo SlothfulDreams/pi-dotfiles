@@ -489,10 +489,10 @@ Do NOT batch [DONE:n] tags into the final message - report each one as it happen
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		} else if (choice === "Refine the plan") {
-			const refinement = await ctx.ui.editor("Refine the plan:", "");
-			if (refinement?.trim()) {
-				pi.sendUserMessage(refinement.trim(), { deliverAs: "followUp" });
-			}
+			// Return to the main composer instead of the text-only dialog so the
+			// refinement can include images pasted from the clipboard.
+			ctx.ui.setEditorText("Refine the plan using this feedback:\n\n");
+			ctx.ui.notify("Refinement ready. Add text or paste images, then submit.", "info");
 		} else if (choice === "Save plan to PLAN.md") {
 			const planPath = join(ctx.cwd, "PLAN.md");
 			const content = `# Plan\n\n${nextPlan.cardItems.map((item) => `${item.step}. ${item.markdown}`).join("\n")}\n`;

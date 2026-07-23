@@ -11,6 +11,7 @@ Read-only exploration mode for safe code analysis.
 - **Completion card**: Green bordered card with struck-through steps when the plan finishes
 - **Compact progress widget**: Shows done count, current step, and next steps during execution
 - **Save to file**: Optional `PLAN.md` export from the decision dialog
+- **Image-aware refinement**: Refine in the main composer so feedback can include pasted images
 - **[DONE:n] markers**: Explicit step completion tracking
 - **Session persistence**: State survives session resume
 
@@ -34,6 +35,7 @@ Plan:
 ```
 
 4. Review the bordered plan card and choose: execute, stay, refine, or save to `PLAN.md`
+   - Choosing refine returns you to the main composer; add text or paste images, then submit
 5. During execution, the agent marks steps complete with `[DONE:n]` tags
 6. Progress widget shows completion status
 
