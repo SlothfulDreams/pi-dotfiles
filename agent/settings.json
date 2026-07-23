@@ -15,8 +15,15 @@
   "packages": [
     "npm:pi-web-access",
     "npm:pi-vimmode",
-    "npm:@ff-labs/pi-fff"
+    "npm:@ff-labs/pi-fff",
+    "npm:@injaneity/pi-computer-use",
+    "npm:@juicesharp/rpiv-ask-user-question"
   ],
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 0,
+    "keepRecentTokens": 20000
+  },
   "terminal": {
     "showTerminalProgress": true,
     "showImages": true,
@@ -24,6 +31,9 @@
   },
   "showHardwareCursor": false,
   "editorPaddingX": 0,
-  "showCacheMissNotices": false,
-  "steeringMode": "one-at-a-time"
+  "showCacheMissNotices": true,
+  "steeringMode": "one-at-a-time",
+  "defaultProjectTrust": "always",
+  "doubleEscapeAction": "tree",
+  "hideThinkingBlock": false
 }
