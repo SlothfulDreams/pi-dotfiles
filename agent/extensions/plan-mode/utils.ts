@@ -95,8 +95,10 @@ const SAFE_PATTERNS = [
 ];
 
 export function isSafeCommand(command: string): boolean {
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(command));
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(command));
+	// Stderr-only redirects don't write files; other redirects stay blocked.
+	const normalized = command.replace(/2>\s*\/dev\/null|2>&1/g, "");
+	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(normalized));
+	const isSafe = SAFE_PATTERNS.some((p) => p.test(normalized));
 	return !isDestructive && isSafe;
 }
 
@@ -127,7 +129,7 @@ export function extractPlanStepSources(message: string): string[] {
 		const cleaned = cleanStepText(source);
 		// Skip stray slash commands and list continuation markers, but keep steps
 		// that begin with file references or other formatted content.
-		if (cleaned.length > 5 && !cleaned.startsWith("/") && !cleaned.startsWith("-")) {
+		if (cleaned.length > 0 && !cleaned.startsWith("/") && !cleaned.startsWith("-")) {
 			steps.push(source);
 		}
 	}

@@ -32,6 +32,10 @@ const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
 const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
+const STEP_EXECUTION_INSTRUCTIONS = `Work on exactly one step at a time, in order.
+The moment a step is finished, output its [DONE:n] tag in that same turn's text before moving to the next step.
+Do NOT batch [DONE:n] tags into the final message - report each one as it happens.`;
+
 interface PlanCardItem {
 	step: number;
 	markdown: string;
@@ -54,6 +58,12 @@ interface PlanModeState {
 interface PendingPlan {
 	items: TodoItem[];
 	cardItems: PlanCardItem[];
+}
+
+type CustomTypedMessage = AgentMessage & { customType?: string };
+
+function customTypeOf(m: AgentMessage): string | undefined {
+	return (m as CustomTypedMessage).customType;
 }
 
 // Type guard for assistant messages
@@ -210,6 +220,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		toolsBeforePlanMode = undefined;
 	}
 
+	function appendPlanCard(todos: TodoItem[], cards: PlanCardItem[], forceCompleted?: boolean): void {
+		pi.appendEntry<PlanCardData>("plan-todo-list", {
+			items: todos.map((item, index) => ({
+				step: item.step,
+				markdown: cards[index]?.markdown ?? item.text,
+				completed: forceCompleted ?? item.completed,
+			})),
+			completed: forceCompleted ?? todos.every((item) => item.completed),
+		});
+	}
+
 	function persistState(): void {
 		pi.appendEntry("plan-mode", {
 			enabled: planModeEnabled,
@@ -255,14 +276,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("No todos. Create a plan first with /plan", "info");
 				return;
 			}
-			pi.appendEntry<PlanCardData>("plan-todo-list", {
-				items: todoItems.map((item, index) => ({
-					step: item.step,
-					markdown: planCardItems[index]?.markdown ?? item.text,
-					completed: item.completed,
-				})),
-				completed: todoItems.every((item) => item.completed),
-			});
+			appendPlanCard(todoItems, planCardItems);
 		},
 	});
 
@@ -275,11 +289,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event) => {
 		if (!planModeEnabled || event.toolName !== "bash") return;
 
-		const command = event.input.command as string;
-		if (!isSafeCommand(command)) {
+		const command = event.input.command;
+		if (typeof command !== "string" || !isSafeCommand(command)) {
 			return {
 				block: true,
-				reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${command}`,
+				reason: `Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: ${String(command)}`,
 			};
 		}
 	});
@@ -290,26 +304,23 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			// Keep only the most recent plan-mode context injection to save tokens.
 			let lastContextIndex = -1;
 			for (let i = event.messages.length - 1; i >= 0; i--) {
-				if ((event.messages[i] as AgentMessage & { customType?: string }).customType === "plan-mode-context") {
+				if (customTypeOf(event.messages[i]) === "plan-mode-context") {
 					lastContextIndex = i;
 					break;
 				}
 			}
 			const messages = event.messages.filter(
-				(m, index) =>
-					(m as AgentMessage & { customType?: string }).customType !== "plan-mode-context" ||
-					index === lastContextIndex,
+				(m, index) => customTypeOf(m) !== "plan-mode-context" || index === lastContextIndex,
 			);
 			return messages.length === event.messages.length ? undefined : { messages };
 		}
 
 		return {
 			messages: event.messages.filter((m) => {
-				const msg = m as AgentMessage & { customType?: string };
-				if (msg.customType === "plan-mode-context") return false;
-				if (msg.role !== "user") return true;
+				if (customTypeOf(m) === "plan-mode-context") return false;
+				if (m.role !== "user") return true;
 
-				const content = msg.content;
+				const content = m.content;
 				if (typeof content === "string") {
 					return !content.includes("[PLAN MODE ACTIVE]");
 				}
@@ -370,9 +381,7 @@ Do NOT attempt to make changes - just describe what you would do.${currentPlan}`
 Remaining steps:
 ${todoList}
 
-Work on exactly one step at a time, in order.
-The moment a step is finished, output its [DONE:n] tag in that same turn's text before moving to the next step.
-Do NOT batch [DONE:n] tags into the final message - report each one as it happens.`,
+${STEP_EXECUTION_INSTRUCTIONS}`,
 					display: false,
 				},
 			};
@@ -417,14 +426,7 @@ Do NOT batch [DONE:n] tags into the final message - report each one as it happen
 		if (executionMode && todoItems.length > 0) {
 			if (todoItems.every((t) => t.completed)) {
 				// Render a green completion card matching the plan card style.
-				pi.appendEntry<PlanCardData>("plan-todo-list", {
-					items: todoItems.map((item, index) => ({
-						step: item.step,
-						markdown: planCardItems[index]?.markdown ?? item.text,
-						completed: true,
-					})),
-					completed: true,
-				});
+				appendPlanCard(todoItems, planCardItems, true);
 				executionMode = false;
 				todoItems = [];
 				planCardItems = [];
@@ -453,9 +455,7 @@ Do NOT batch [DONE:n] tags into the final message - report each one as it happen
 		planCardItems = nextPlan.cardItems;
 		persistState();
 
-		pi.appendEntry<PlanCardData>("plan-todo-list", {
-			items: nextPlan.cardItems,
-		});
+		appendPlanCard(nextPlan.items, nextPlan.cardItems, false);
 
 		const choice = await ctx.ui.select("Plan mode - what next?", [
 			"Execute the plan (track progress)",
@@ -481,9 +481,7 @@ Remaining steps:
 ${remainingList}
 
 Start with: ${firstTodoItem.text}
-Work on exactly one step at a time, in order.
-The moment a step is finished, output its [DONE:n] tag in that same turn's text before moving to the next step.
-Do NOT batch [DONE:n] tags into the final message - report each one as it happens.`;
+${STEP_EXECUTION_INSTRUCTIONS}`;
 			pi.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: false },
 				{ triggerTurn: true, deliverAs: "followUp" },
@@ -511,11 +509,12 @@ Do NOT batch [DONE:n] tags into the final message - report each one as it happen
 			planModeEnabled = true;
 		}
 
+		type SessionEntryLike = { type: string; customType?: string };
 		const entries = ctx.sessionManager.getEntries();
 
 		// Restore persisted state
 		const planModeEntry = entries
-			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "plan-mode")
+			.filter((e: SessionEntryLike) => e.type === "custom" && e.customType === "plan-mode")
 			.pop() as { data?: PlanModeState } | undefined;
 
 		if (planModeEntry?.data) {
@@ -533,7 +532,7 @@ Do NOT batch [DONE:n] tags into the final message - report each one as it happen
 			// Find the index of the last plan-mode-execute entry (marks when current execution started)
 			let executeIndex = -1;
 			for (let i = entries.length - 1; i >= 0; i--) {
-				const entry = entries[i] as { type: string; customType?: string };
+				const entry = entries[i] as SessionEntryLike;
 				if (entry.customType === "plan-mode-execute") {
 					executeIndex = i;
 					break;

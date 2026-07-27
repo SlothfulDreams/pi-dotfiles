@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.80.6",
+  "lastChangelogVersion": "0.81.1",
   "theme": "github-dark-default",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
@@ -35,5 +35,5 @@
   "steeringMode": "one-at-a-time",
   "defaultProjectTrust": "always",
   "doubleEscapeAction": "tree",
-  "hideThinkingBlock": false
+  "hideThinkingBlock": true
 }
