@@ -102,12 +102,6 @@ export function isSafeCommand(command: string): boolean {
 	return !isDestructive && isSafe;
 }
 
-export interface TodoItem {
-	step: number;
-	text: string;
-	completed: boolean;
-}
-
 export function cleanStepText(text: string): string {
 	return text
 		.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1") // Remove bold/italic markers
@@ -134,30 +128,4 @@ export function extractPlanStepSources(message: string): string[] {
 		}
 	}
 	return steps;
-}
-
-export function extractTodoItems(message: string): TodoItem[] {
-	return extractPlanStepSources(message).map((source, index) => ({
-		step: index + 1,
-		text: cleanStepText(source),
-		completed: false,
-	}));
-}
-
-export function extractDoneSteps(message: string): number[] {
-	const steps: number[] = [];
-	for (const match of message.matchAll(/\[DONE:(\d+)\]/gi)) {
-		const step = Number(match[1]);
-		if (Number.isFinite(step)) steps.push(step);
-	}
-	return steps;
-}
-
-export function markCompletedSteps(text: string, items: TodoItem[]): number {
-	const doneSteps = extractDoneSteps(text);
-	for (const step of doneSteps) {
-		const item = items.find((t) => t.step === step);
-		if (item) item.completed = true;
-	}
-	return doneSteps.length;
 }

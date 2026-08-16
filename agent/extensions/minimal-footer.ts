@@ -1,9 +1,18 @@
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { relative } from "node:path";
+import { promisify } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  getCapabilities,
+  hyperlink,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 
+const execFileAsync = promisify(execFile);
 const BAR_WIDTH = 10;
 const FILLED = "━";
 const EMPTY = "─";
@@ -15,10 +24,38 @@ function formatDirectory(cwd: string): string {
   return cwd;
 }
 
+type PullRequest = {
+  number: number;
+  url: string;
+};
+
+async function findOpenPullRequest(cwd: string): Promise<PullRequest | undefined> {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh",
+      ["pr", "view", "--json", "number,url,state"],
+      { cwd, timeout: 5_000 },
+    );
+    const pullRequest = JSON.parse(stdout) as PullRequest & { state?: string };
+    if (
+      pullRequest.state !== "OPEN" ||
+      !Number.isInteger(pullRequest.number) ||
+      !pullRequest.url.startsWith("https://")
+    ) {
+      return undefined;
+    }
+    return { number: pullRequest.number, url: pullRequest.url };
+  } catch {
+    // Not a GitHub repository, gh is unavailable, or this branch has no PR.
+    return undefined;
+  }
+}
+
 export default function minimalFooter(pi: ExtensionAPI) {
   let fastMode = true;
   let agentStartedAt: number | undefined;
   let workTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshPullRequestStatus: (() => void) | undefined;
 
   function formatDuration(ms: number): string {
     if (ms < 1_000) return `${Math.max(1, Math.round(ms))}ms`;
@@ -112,6 +149,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
     agentStartedAt = undefined;
     if (ctx.hasUI) ctx.ui.setWorkingMessage();
     pi.appendEntry("work-duration", { durationMs });
+    refreshPullRequestStatus?.();
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -119,12 +157,39 @@ export default function minimalFooter(pi: ExtensionAPI) {
 
     updateFastStatus(ctx);
     ctx.ui.setFooter((tui, theme, footerData) => {
-      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+      let pullRequest: PullRequest | undefined;
+      let refreshId = 0;
+      let disposed = false;
+
+      const refreshPullRequest = async () => {
+        const currentRefreshId = ++refreshId;
+        pullRequest = undefined;
+        tui.requestRender();
+        const result = await findOpenPullRequest(ctx.cwd);
+        if (disposed || currentRefreshId !== refreshId) return;
+        pullRequest = result;
+        tui.requestRender();
+      };
+
+      const requestPullRequestRefresh = () => {
+        void refreshPullRequest();
+      };
+      refreshPullRequestStatus = requestPullRequestRefresh;
+      const unsubscribe = footerData.onBranchChange(requestPullRequestRefresh);
+      requestPullRequestRefresh();
+
       const separator = theme.fg("borderMuted", " · ");
       const compactSeparator = theme.fg("borderMuted", "·");
 
       return {
-        dispose: unsubscribe,
+        dispose() {
+          disposed = true;
+          refreshId++;
+          if (refreshPullRequestStatus === requestPullRequestRefresh) {
+            refreshPullRequestStatus = undefined;
+          }
+          unsubscribe();
+        },
         invalidate() {},
         render(width: number): string[] {
           let cost = 0;
@@ -160,12 +225,23 @@ export default function minimalFooter(pi: ExtensionAPI) {
 
           const branch = footerData.getGitBranch();
           const planStatus = footerData.getExtensionStatuses().get("plan-mode");
+          const pullRequestNumber = pullRequest
+            ? theme.underline(theme.fg("warning", `#${pullRequest.number}`))
+            : "";
+          const pullRequestLink =
+            pullRequest && getCapabilities().hyperlinks
+              ? hyperlink(pullRequestNumber, pullRequest.url)
+              : pullRequestNumber;
+          const pullRequestStatus = pullRequest
+            ? theme.fg("muted", "PR ") + pullRequestLink
+            : "";
           const location =
             theme.fg("accent", "◆ ") +
             theme.bold(theme.fg("text", formatDirectory(ctx.cwd))) +
             (branch
               ? separator + theme.fg("muted", ` ${branch}`)
-              : "");
+              : "") +
+            (pullRequestStatus ? separator + pullRequestStatus : "");
 
           const minimumPlanWidth = planStatus ? visibleWidth(planStatus) : 0;
           const maxTopRightWidth = Math.max(
@@ -216,6 +292,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
     if (workTimer) clearInterval(workTimer);
     workTimer = undefined;
     agentStartedAt = undefined;
+    refreshPullRequestStatus = undefined;
     if (ctx.hasUI) ctx.ui.setWorkingMessage();
     if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
   });

@@ -6,6 +6,7 @@ web-search.json
 # Installed packages and session transcripts
 agent/npm/
 agent/sessions/
+web-search-cache/
 
 # Local environment files
 .env

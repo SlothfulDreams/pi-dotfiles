@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { getPackageDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 
 const IMAGE_MARKER_REGEX = /\[Image #(\d+)\]/g;
 const ANY_IMAGE_MARKER_REGEX = /\[Image #\d+\]/;
@@ -14,6 +14,10 @@ interface ClipboardImage {
 
 interface ClipboardImageModule {
 	readClipboardImage(): Promise<ClipboardImage | null>;
+}
+
+interface NativeClipboard {
+	hasImage(): boolean;
 }
 
 function isClipboardImageModule(value: unknown): value is ClipboardImageModule {
@@ -41,51 +45,104 @@ async function getClipboardImageModule() {
 	return clipboardImageModule;
 }
 
+// Pi's bundled native clipboard binding exposes a synchronous hasImage() check
+// (~3ms) that lets us decide instantly whether Ctrl+V is an image paste,
+// without waiting for the full image read. Null on platforms where the native
+// binding is unavailable (e.g. Wayland).
+let nativeClipboard: NativeClipboard | null | undefined;
+
+async function loadNativeClipboard() {
+	try {
+		const modulePath = join(getPackageDir(), "dist", "utils", "clipboard-native.js");
+		const module = (await import(pathToFileURL(modulePath).href)) as {
+			clipboard?: { hasImage?: unknown } | null;
+		};
+		const clipboard = module.clipboard;
+		nativeClipboard =
+			clipboard && typeof clipboard.hasImage === "function" ? (clipboard as NativeClipboard) : null;
+	} catch {
+		nativeClipboard = null;
+	}
+}
+
 export default function imagePlaceholdersExtension(pi: ExtensionAPI) {
-	const pendingImages = new Map<number, ImageContent>();
+	const pendingImages = new Map<number, Promise<ImageContent | null>>();
 	let nextImageNumber = 1;
-	let pasteQueue = Promise.resolve();
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
+
+		// Warm up the dynamic imports so the first paste doesn't pay for them.
+		void getClipboardImageModule().catch(() => {});
+		void loadNativeClipboard();
+
+		// Editor changes made from a raw terminal-input listener (or a later
+		// async continuation) happen outside Pi's input->render loop, so nothing
+		// schedules a repaint and the marker stays invisible until the next
+		// keypress. setStatus with an unset key is a no-op that unconditionally
+		// calls ui.requestRender().
+		const requestRender = () => ctx.ui.setStatus("image-placeholders-render", undefined);
 
 		ctx.ui.onTerminalInput((data) => {
 			const isImagePaste =
 				matchesKey(data, "ctrl+v") || (process.platform === "win32" && matchesKey(data, "alt+v"));
 			if (!isImagePaste) return;
 
-			pasteQueue = pasteQueue
-				.then(async () => {
-					const currentText = ctx.ui.getEditorText();
-					if (!ANY_IMAGE_MARKER_REGEX.test(currentText)) {
-						pendingImages.clear();
-						nextImageNumber = 1;
-					}
+			// Kitty keyboard protocol (flag 2) reports press, repeat, and release as
+			// separate events and matchesKey matches all of them — only paste on press,
+			// but still consume the others so nothing else handles them.
+			if (isKeyRelease(data) || isKeyRepeat(data)) return { consume: true };
 
-					const clipboard = await getClipboardImageModule();
-					const image = await clipboard.readClipboardImage();
-					if (!image) return;
+			// No image on the clipboard: let Pi's built-in Ctrl+V paste text instead.
+			if (nativeClipboard && !nativeClipboard.hasImage()) return;
 
-					const imageNumber = nextImageNumber++;
-					pendingImages.set(imageNumber, {
-						type: "image",
-						data: Buffer.from(image.bytes).toString("base64"),
-						mimeType: image.mimeType,
-					});
+			if (!ANY_IMAGE_MARKER_REGEX.test(ctx.ui.getEditorText())) {
+				pendingImages.clear();
+				nextImageNumber = 1;
+			}
 
-					const marker = `[Image #${imageNumber}]`;
-					ctx.ui.pasteToEditor(marker);
-					if (!ctx.ui.getEditorText().includes(marker)) {
-						// Modal editors may ignore bracketed paste outside insert mode.
-						// Fall back to appending the marker so the image is never lost.
-						const latestText = ctx.ui.getEditorText();
-						const separator = latestText.length > 0 && !/\s$/.test(latestText) ? " " : "";
-						ctx.ui.setEditorText(`${latestText}${separator}${marker}`);
-					}
+			const imageNumber = nextImageNumber++;
+			const marker = `[Image #${imageNumber}]`;
+
+			// Insert the marker immediately; the image bytes are read in the
+			// background and only need to be ready when the message is submitted.
+			ctx.ui.pasteToEditor(marker);
+			if (!ctx.ui.getEditorText().includes(marker)) {
+				// Modal editors may ignore bracketed paste outside insert mode.
+				// Fall back to appending the marker so the image is never lost.
+				const latestText = ctx.ui.getEditorText();
+				const separator = latestText.length > 0 && !/\s$/.test(latestText) ? " " : "";
+				ctx.ui.setEditorText(`${latestText}${separator}${marker}`);
+			}
+			requestRender();
+
+			const read = (async (): Promise<ImageContent | null> => {
+				const clipboard = await getClipboardImageModule();
+				const image = await clipboard.readClipboardImage();
+				if (!image) return null;
+				return {
+					type: "image",
+					data: Buffer.from(image.bytes).toString("base64"),
+					mimeType: image.mimeType,
+				};
+			})();
+			pendingImages.set(imageNumber, read);
+
+			read
+				.then((image) => {
+					if (image) return;
+					// Nothing pasteable after all — take the marker back out.
+					pendingImages.delete(imageNumber);
+					ctx.ui.setEditorText(ctx.ui.getEditorText().replace(marker, ""));
+					ctx.ui.notify("No image found on the clipboard", "warning");
+					requestRender();
 				})
 				.catch((error: unknown) => {
+					pendingImages.delete(imageNumber);
+					ctx.ui.setEditorText(ctx.ui.getEditorText().replace(marker, ""));
 					const message = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Could not paste image: ${message}`, "error");
+					requestRender();
 				});
 
 			return { consume: true };
@@ -97,21 +154,26 @@ export default function imagePlaceholdersExtension(pi: ExtensionAPI) {
 
 		IMAGE_MARKER_REGEX.lastIndex = 0;
 		const attachedNumbers = new Set<number>();
-		const images: ImageContent[] = [];
+		const reads: Promise<ImageContent | null>[] = [];
 		for (const match of event.text.matchAll(IMAGE_MARKER_REGEX)) {
 			const imageNumber = Number(match[1]);
 			if (attachedNumbers.has(imageNumber)) continue;
 
-			const image = pendingImages.get(imageNumber);
-			if (!image) continue;
+			const read = pendingImages.get(imageNumber);
+			if (!read) continue;
 			attachedNumbers.add(imageNumber);
-			images.push(image);
+			reads.push(read);
 		}
 
-		if (images.length === 0) return;
+		if (reads.length === 0) return;
+
+		const images = (await Promise.all(reads)).filter(
+			(image): image is ImageContent => image !== null,
+		);
 
 		pendingImages.clear();
 		nextImageNumber = 1;
+		if (images.length === 0) return;
 		return {
 			action: "transform",
 			text: event.text,
