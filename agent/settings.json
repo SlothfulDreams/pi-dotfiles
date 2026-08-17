@@ -18,7 +18,9 @@
     "npm:@ff-labs/pi-fff",
     "npm:@injaneity/pi-computer-use",
     "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:@juicesharp/rpiv-todo"
+    "npm:@juicesharp/rpiv-todo",
+    "npm:@juicesharp/rpiv-btw",
+    "git:github.com/paoloanzn/pi-black"
   ],
   "compaction": {
     "enabled": true,
