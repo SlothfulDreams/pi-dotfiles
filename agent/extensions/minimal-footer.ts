@@ -124,15 +124,6 @@ export default function minimalFooter(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerShortcut("ctrl+shift+f", {
-    description: "Toggle OpenAI priority service tier",
-    handler: async (ctx) => {
-      if (!isOpenAIModel(ctx.model?.provider)) return;
-      fastMode = !fastMode;
-      updateFastStatus(ctx);
-    },
-  });
-
   pi.on("before_provider_request", (event, ctx) => {
     if (!fastMode || !isOpenAIModel(ctx.model?.provider)) return;
     if (event.payload && typeof event.payload === "object") {
