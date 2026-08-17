@@ -29,6 +29,32 @@ type PullRequest = {
   url: string;
 };
 
+type GitDivergence = {
+  branch: string;
+  ahead: number;
+  behind: number;
+};
+
+async function findGitDivergence(
+  cwd: string,
+  branch: string,
+): Promise<GitDivergence | undefined> {
+  try {
+    // Read the locally available upstream tracking ref only. This does not run
+    // git fetch, so new remote commits appear after that ref is updated.
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+      { cwd, timeout: 5_000 },
+    );
+    const match = stdout.match(/^(\d+)\s+(\d+)/);
+    if (!match) return undefined;
+    return { branch, ahead: Number(match[1]), behind: Number(match[2]) };
+  } catch {
+    return undefined;
+  }
+}
+
 async function findOpenPullRequest(cwd: string): Promise<PullRequest | undefined> {
   try {
     const { stdout } = await execFileAsync(
@@ -55,7 +81,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
   let fastMode = true;
   let agentStartedAt: number | undefined;
   let workTimer: ReturnType<typeof setInterval> | undefined;
-  let refreshPullRequestStatus: (() => void) | undefined;
+  let refreshRepositoryStatus: (() => void) | undefined;
 
   function formatDuration(ms: number): string {
     if (ms < 1_000) return `${Math.max(1, Math.round(ms))}ms`;
@@ -149,7 +175,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
     agentStartedAt = undefined;
     if (ctx.hasUI) ctx.ui.setWorkingMessage();
     pi.appendEntry("work-duration", { durationMs });
-    refreshPullRequestStatus?.();
+    refreshRepositoryStatus?.();
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -158,25 +184,32 @@ export default function minimalFooter(pi: ExtensionAPI) {
     updateFastStatus(ctx);
     ctx.ui.setFooter((tui, theme, footerData) => {
       let pullRequest: PullRequest | undefined;
+      let divergence: GitDivergence | undefined;
       let refreshId = 0;
       let disposed = false;
 
-      const refreshPullRequest = async () => {
+      const refreshRepository = async () => {
         const currentRefreshId = ++refreshId;
+        const branch = footerData.getGitBranch();
         pullRequest = undefined;
+        divergence = undefined;
         tui.requestRender();
-        const result = await findOpenPullRequest(ctx.cwd);
+        const [pullRequestResult, divergenceResult] = await Promise.all([
+          findOpenPullRequest(ctx.cwd),
+          branch ? findGitDivergence(ctx.cwd, branch) : undefined,
+        ]);
         if (disposed || currentRefreshId !== refreshId) return;
-        pullRequest = result;
+        pullRequest = pullRequestResult;
+        divergence = divergenceResult;
         tui.requestRender();
       };
 
-      const requestPullRequestRefresh = () => {
-        void refreshPullRequest();
+      const requestRepositoryRefresh = () => {
+        void refreshRepository();
       };
-      refreshPullRequestStatus = requestPullRequestRefresh;
-      const unsubscribe = footerData.onBranchChange(requestPullRequestRefresh);
-      requestPullRequestRefresh();
+      refreshRepositoryStatus = requestRepositoryRefresh;
+      const unsubscribe = footerData.onBranchChange(requestRepositoryRefresh);
+      requestRepositoryRefresh();
 
       const separator = theme.fg("borderMuted", " · ");
       const compactSeparator = theme.fg("borderMuted", "·");
@@ -185,8 +218,8 @@ export default function minimalFooter(pi: ExtensionAPI) {
         dispose() {
           disposed = true;
           refreshId++;
-          if (refreshPullRequestStatus === requestPullRequestRefresh) {
-            refreshPullRequestStatus = undefined;
+          if (refreshRepositoryStatus === requestRepositoryRefresh) {
+            refreshRepositoryStatus = undefined;
           }
           unsubscribe();
         },
@@ -224,6 +257,20 @@ export default function minimalFooter(pi: ExtensionAPI) {
             theme.fg("dim", "cost ") + theme.fg("muted", `$${cost.toFixed(3)}`);
 
           const branch = footerData.getGitBranch();
+          // Divergence results are tagged with their branch; a result from a
+          // previous branch is ignored until the pending refresh replaces it.
+          const divergenceStatus =
+            divergence && divergence.branch === branch
+              ? (divergence.ahead > 0
+                  ? theme.fg("success", ` ⇡${divergence.ahead}`)
+                  : "") +
+                (divergence.behind > 0
+                  ? theme.fg("warning", ` ⇣${divergence.behind}`)
+                  : "")
+              : "";
+          const branchStatus = branch
+            ? theme.fg("muted", ` ${branch}`) + divergenceStatus
+            : "";
           const planStatus = footerData.getExtensionStatuses().get("plan-mode");
           const pullRequestNumber = pullRequest
             ? theme.underline(theme.fg("warning", `#${pullRequest.number}`))
@@ -238,9 +285,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
           const location =
             theme.fg("accent", "◆ ") +
             theme.bold(theme.fg("text", formatDirectory(ctx.cwd))) +
-            (branch
-              ? separator + theme.fg("muted", ` ${branch}`)
-              : "") +
+            (branchStatus ? separator + branchStatus : "") +
             (pullRequestStatus ? separator + pullRequestStatus : "");
 
           const minimumPlanWidth = planStatus ? visibleWidth(planStatus) : 0;
@@ -292,7 +337,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
     if (workTimer) clearInterval(workTimer);
     workTimer = undefined;
     agentStartedAt = undefined;
-    refreshPullRequestStatus = undefined;
+    refreshRepositoryStatus = undefined;
     if (ctx.hasUI) ctx.ui.setWorkingMessage();
     if (ctx.mode === "tui") ctx.ui.setFooter(undefined);
   });
