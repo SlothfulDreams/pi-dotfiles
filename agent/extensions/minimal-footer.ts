@@ -16,6 +16,89 @@ const execFileAsync = promisify(execFile);
 const BAR_WIDTH = 10;
 const FILLED = "━";
 const EMPTY = "─";
+const SPINNER_VERBS = [
+  "Beboppin'",
+  "Befuddling",
+  "Bloviating",
+  "Boondoggling",
+  "Booping",
+  "Brewing",
+  "Burrowing",
+  "Canoodling",
+  "Caramelizing",
+  "Catapulting",
+  "Cerebrating",
+  "Choreographing",
+  "Cogitating",
+  "Combobulating",
+  "Concocting",
+  "Crystallizing",
+  "Dilly-dallying",
+  "Discombobulating",
+  "Doodling",
+  "Drizzling",
+  "Enchanting",
+  "Fiddle-faddling",
+  "Finagling",
+  "Flambéing",
+  "Flibbertigibbeting",
+  "Flummoxing",
+  "Frolicking",
+  "Gallivanting",
+  "Gesticulating",
+  "Germinating",
+  "Grooving",
+  "Hyperspacing",
+  "Ionizing",
+  "Jitterbugging",
+  "Julienning",
+  "Lollygagging",
+  "Marinating",
+  "Metamorphosing",
+  "Moonwalking",
+  "Moseying",
+  "Noodling",
+  "Nucleating",
+  "Orbiting",
+  "Osmosing",
+  "Perambulating",
+  "Percolating",
+  "Philosophising",
+  "Photosynthesizing",
+  "Pondering",
+  "Pontificating",
+  "Prestidigitating",
+  "Puttering",
+  "Quantumizing",
+  "Razzle-dazzling",
+  "Razzmatazzing",
+  "Recombobulating",
+  "Reticulating",
+  "Scampering",
+  "Schlepping",
+  "Shenaniganing",
+  "Shimmying",
+  "Skedaddling",
+  "Spelunking",
+  "Sublimating",
+  "Symbioting",
+  "Tomfoolering",
+  "Topsy-turvying",
+  "Transfiguring",
+  "Transmuting",
+  "Undulating",
+  "Vibing",
+  "Waddling",
+  "Whatchamacalliting",
+  "Whirlpooling",
+  "Wibbling",
+  "Zesting",
+  "Zigzagging",
+] as const;
+
+function randomSpinnerVerb(): string {
+  return SPINNER_VERBS[Math.floor(Math.random() * SPINNER_VERBS.length)] ?? "Working";
+}
 
 function formatDirectory(cwd: string): string {
   const home = homedir();
@@ -80,6 +163,7 @@ async function findOpenPullRequest(cwd: string): Promise<PullRequest | undefined
 export default function minimalFooter(pi: ExtensionAPI) {
   let fastMode = true;
   let agentStartedAt: number | undefined;
+  let spinnerVerb = "Working";
   let workTimer: ReturnType<typeof setInterval> | undefined;
   let refreshRepositoryStatus: (() => void) | undefined;
 
@@ -145,11 +229,14 @@ export default function minimalFooter(pi: ExtensionAPI) {
     // Only set the start time on the first agent_start of a settled-to-settled
     // cycle. Retries, compaction runs, and queued follow-ups fire agent_start
     // again, but the elapsed time should accumulate continuously.
-    if (agentStartedAt === undefined) agentStartedAt = Date.now();
+    if (agentStartedAt === undefined) {
+      agentStartedAt = Date.now();
+      spinnerVerb = randomSpinnerVerb();
+    }
     if (workTimer) clearInterval(workTimer);
     const updateWorkingTime = () => {
       if (agentStartedAt === undefined) return;
-      ctx.ui.setWorkingMessage(`Working... ${formatElapsed(Date.now() - agentStartedAt)}`);
+      ctx.ui.setWorkingMessage(`${spinnerVerb}... ${formatElapsed(Date.now() - agentStartedAt)}`);
     };
     updateWorkingTime();
     // Tick faster than 1s so the whole-second display never visibly stalls

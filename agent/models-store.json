@@ -247,7 +247,7 @@
         }
       }
     ],
-    "checkedAt": 1786962272721,
+    "checkedAt": 1787629169086,
     "lastModified": 1786710729000,
     "etag": "W/\"7572a78e60b78526600ed2a9b74b579d\""
   },
@@ -377,7 +377,7 @@
         }
       }
     ],
-    "checkedAt": 1786962270571,
+    "checkedAt": 1787629169078,
     "lastModified": 1786962049000,
     "etag": "W/\"cd1f983d46f3bac772e16ab0a21e976b\""
   },
@@ -1611,17 +1611,17 @@
           "image"
         ],
         "cost": {
-          "input": 5,
-          "output": 30,
-          "cacheRead": 0.5,
-          "cacheWrite": 6.25,
+          "input": 2.5,
+          "output": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 3.125,
           "tiers": [
             {
               "inputTokensAbove": 272000,
-              "input": 10,
-              "output": 45,
-              "cacheRead": 1,
-              "cacheWrite": 12.5
+              "input": 5,
+              "output": 22.5,
+              "cacheRead": 0.5,
+              "cacheWrite": 6.25
             }
           ]
         },
@@ -1913,8 +1913,8 @@
         }
       }
     ],
-    "checkedAt": 1786962271450,
-    "lastModified": 1786962019000,
-    "etag": "W/\"a40015128dd4e54e523e60c506bac306\""
+    "checkedAt": 1787629169234,
+    "lastModified": 1787571255000,
+    "etag": "W/\"df446c13be26e18dfba3b3968e5d19c3\""
   }
 }
