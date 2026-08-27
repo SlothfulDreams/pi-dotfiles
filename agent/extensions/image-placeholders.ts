@@ -128,21 +128,20 @@ export default function imagePlaceholdersExtension(pi: ExtensionAPI) {
 			})();
 			pendingImages.set(imageNumber, read);
 
+			// Nothing pasteable after all — take the marker back out.
+			const discardMarker = (notification: string, severity: "warning" | "error") => {
+				pendingImages.delete(imageNumber);
+				ctx.ui.setEditorText(ctx.ui.getEditorText().replace(marker, ""));
+				ctx.ui.notify(notification, severity);
+				requestRender();
+			};
 			read
 				.then((image) => {
-					if (image) return;
-					// Nothing pasteable after all — take the marker back out.
-					pendingImages.delete(imageNumber);
-					ctx.ui.setEditorText(ctx.ui.getEditorText().replace(marker, ""));
-					ctx.ui.notify("No image found on the clipboard", "warning");
-					requestRender();
+					if (!image) discardMarker("No image found on the clipboard", "warning");
 				})
 				.catch((error: unknown) => {
-					pendingImages.delete(imageNumber);
-					ctx.ui.setEditorText(ctx.ui.getEditorText().replace(marker, ""));
 					const message = error instanceof Error ? error.message : String(error);
-					ctx.ui.notify(`Could not paste image: ${message}`, "error");
-					requestRender();
+					discardMarker(`Could not paste image: ${message}`, "error");
 				});
 
 			return { consume: true };
