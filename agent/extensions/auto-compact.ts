@@ -8,13 +8,12 @@ export default function (pi: ExtensionAPI) {
 	const compactIfNeeded = (ctx: ExtensionContext) => {
 		if (compactionPending || !ctx.isIdle()) return;
 
-		const usage = ctx.getContextUsage();
-		if (usage?.percent === null || usage?.percent === undefined) return;
-		if (usage.percent < COMPACTION_THRESHOLD_PERCENT) return;
+		const percent = ctx.getContextUsage()?.percent;
+		if (percent == null || percent < COMPACTION_THRESHOLD_PERCENT) return;
 
 		compactionPending = true;
 		ctx.ui.notify(
-			`Context is ${usage.percent.toFixed(1)}% full; compacting at the ${COMPACTION_THRESHOLD_PERCENT}% threshold`,
+			`Context is ${percent.toFixed(1)}% full; compacting at the ${COMPACTION_THRESHOLD_PERCENT}% threshold`,
 			"info",
 		);
 		ctx.compact({
