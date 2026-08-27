@@ -56,8 +56,24 @@ const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write", "todo"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
 const CHOICE_EXECUTE = "Execute the plan (track progress)";
+const CHOICE_EXECUTE_FRESH = "Execute the plan (fresh context)";
 const CHOICE_STAY = "Stay in plan mode";
 const CHOICE_SAVE = "Save plan to PLAN.md";
+
+const EXECUTE_INSTRUCTIONS = `First call todo with action "create" once for each numbered plan step, preserving the same order and meaning. Then work on exactly one task at a time: mark it in_progress before starting and completed immediately after it is fully verified. Start with step 1.`;
+
+function formatNumberedSteps(steps: string[]): string {
+	return steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+}
+
+function buildFreshExecutionPrompt(steps: string[]): string {
+	return `Execute the plan below using the todo tool for progress tracking.
+
+Plan:
+${formatNumberedSteps(steps)}
+
+${EXECUTE_INSTRUCTIONS}`;
+}
 
 // Legacy card entries from the pre-tool version of this extension
 interface LegacyPlanCardData {
@@ -71,7 +87,7 @@ interface PlanModeState {
 
 interface ProposePlanDetails {
 	steps: string[];
-	choice: "execute" | "stay" | "save" | null;
+	choice: "execute" | "execute-fresh" | "stay" | "save" | null;
 }
 
 type CustomTypedMessage = AgentMessage & { customType?: string };
@@ -136,6 +152,8 @@ function createPlanCard(steps: string[], theme: ThemeLike): Component {
 export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let toolsBeforePlanMode: string[] | undefined;
+	// Steps handed from the propose_plan tool to the fresh-execution command.
+	let freshExecutionSteps: string[] | undefined;
 
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
@@ -223,6 +241,32 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
+	// Tool handlers only receive the base extension context, which has no
+	// session-control methods. Approving with "fresh context" routes through
+	// this command because command handlers get newSession/waitForIdle.
+	pi.registerCommand("plan-execute-fresh", {
+		description: "Execute the just-approved plan in a fresh session (used by plan mode)",
+		handler: async (_args, ctx) => {
+			const steps = freshExecutionSteps;
+			freshExecutionSteps = undefined;
+			if (!steps || steps.length === 0) {
+				ctx.ui.notify("No approved plan pending fresh execution.", "warning");
+				return;
+			}
+
+			await ctx.waitForIdle();
+			const result = await ctx.newSession({
+				parentSession: ctx.sessionManager.getSessionFile(),
+				withSession: async (freshCtx) => {
+					await freshCtx.sendUserMessage(buildFreshExecutionPrompt(steps));
+				},
+			});
+			if (result.cancelled) {
+				ctx.ui.notify("Fresh session cancelled; plan not executed.", "warning");
+			}
+		},
+	});
+
 	// Plans are delivered through this tool instead of being parsed out of text.
 	pi.registerTool({
 		name: "propose_plan",
@@ -267,6 +311,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 			const choice = await ctx.ui.select("Plan proposed - what next?", [
 				CHOICE_EXECUTE,
+				CHOICE_EXECUTE_FRESH,
 				CHOICE_STAY,
 				CHOICE_SAVE,
 			]);
@@ -283,16 +328,34 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 							type: "text",
 							text: `The user approved the plan. Plan mode is now OFF and full tool access is restored.
 
-Execute the plan now. First call todo with action "create" once for each plan step, preserving the same order and meaning. Then work on exactly one task at a time: mark it in_progress before starting and completed immediately after it is fully verified. Start with step 1.`,
+Execute the plan now. ${EXECUTE_INSTRUCTIONS}`,
 						},
 					],
 					details: { steps, choice: "execute" } satisfies ProposePlanDetails,
 				};
 			}
 
+			if (choice === CHOICE_EXECUTE_FRESH) {
+				exitPlanMode(ctx);
+				freshExecutionSteps = steps;
+				// Runs the command after this tool returns; the command waits for
+				// this run to settle before replacing the session.
+				void pi.sendUserMessage("/plan-execute-fresh");
+				return {
+					content: [
+						{
+							type: "text",
+							text: "The user approved the plan and chose to execute it in a fresh session with cleared context. This session ends here; take no further action.",
+						},
+					],
+					details: { steps, choice: "execute-fresh" } satisfies ProposePlanDetails,
+					terminate: true,
+				};
+			}
+
 			if (choice === CHOICE_SAVE) {
 				const planPath = join(ctx.cwd, "PLAN.md");
-				const content = `# Plan\n\n${steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}\n`;
+				const content = `# Plan\n\n${formatNumberedSteps(steps)}\n`;
 				try {
 					writeFileSync(planPath, content, "utf8");
 					ctx.ui.notify(`Plan saved to ${planPath}`, "info");
@@ -329,6 +392,8 @@ Execute the plan now. First call todo with action "create" once for each plan st
 			switch (details?.choice) {
 				case "execute":
 					return new Text(theme.fg("success", "✓ Approved - executing"), 0, 0);
+				case "execute-fresh":
+					return new Text(theme.fg("success", "✓ Approved - executing in fresh context"), 0, 0);
 				case "save":
 					return new Text(theme.fg("success", "✓ Saved to PLAN.md"), 0, 0);
 				case "stay":
