@@ -46,7 +46,7 @@ Restart Pi or run `/reload` after installation.
    which renders the plan card and opens the approval dialog:
    - **Execute the plan** - plan mode turns off, tools are restored, and the
      agent executes immediately with one `todo` task per step
-   - **Execute the plan (fresh context)** - Claude Code-style: the session is
+   - **Execute the plan (clear context)** - Claude Code-style: the session is
      replaced with a fresh one seeded only with the plan, then execution starts
      with a clean context window
    - **Stay in plan mode** - the turn ends; type feedback to refine the plan
@@ -74,7 +74,7 @@ call with the revised steps.
 - On approval it restores tools and returns execution instructions as the tool
   result; the agent continues in the same run (tool changes take effect on the
   next model request).
-- On fresh-context approval the tool terminates the run and triggers the
+- On clear-context approval the tool terminates the run and triggers the
   internal `/plan-execute-fresh` command (tool contexts lack session-control
   methods, command contexts have them). The command waits for idle, then
   creates a new session - parented to the old one - seeded with a single user

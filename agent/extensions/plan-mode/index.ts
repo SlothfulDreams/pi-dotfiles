@@ -56,7 +56,7 @@ const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write", "todo"]);
 const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
 const CHOICE_EXECUTE = "Execute the plan (track progress)";
-const CHOICE_EXECUTE_FRESH = "Execute the plan (fresh context)";
+const CHOICE_EXECUTE_FRESH = "Execute the plan (clear context)";
 const CHOICE_STAY = "Stay in plan mode";
 const CHOICE_SAVE = "Save plan to PLAN.md";
 
@@ -242,7 +242,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	// Tool handlers only receive the base extension context, which has no
-	// session-control methods. Approving with "fresh context" routes through
+	// session-control methods. Approving with "clear context" routes through
 	// this command because command handlers get newSession/waitForIdle.
 	pi.registerCommand("plan-execute-fresh", {
 		description: "Execute the just-approved plan in a fresh session (used by plan mode)",
@@ -393,7 +393,7 @@ Execute the plan now. ${EXECUTE_INSTRUCTIONS}`,
 				case "execute":
 					return new Text(theme.fg("success", "✓ Approved - executing"), 0, 0);
 				case "execute-fresh":
-					return new Text(theme.fg("success", "✓ Approved - executing in fresh context"), 0, 0);
+					return new Text(theme.fg("success", "✓ Approved - executing with cleared context"), 0, 0);
 				case "save":
 					return new Text(theme.fg("success", "✓ Saved to PLAN.md"), 0, 0);
 				case "stay":
