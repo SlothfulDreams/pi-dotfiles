@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { relative } from "node:path";
 import { promisify } from "node:util";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
   hyperlink,
@@ -107,6 +107,27 @@ function formatDirectory(cwd: string): string {
   return cwd;
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1_000) return `${Math.max(1, Math.round(ms))}ms`;
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.floor((ms % 60_000) / 1_000);
+  return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+}
+
+// Live counter format: whole seconds, like Claude Code's working timer.
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1_000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+}
+
+function isOpenAIModel(provider: string | undefined): boolean {
+  return provider === "openai" || provider === "openai-codex";
+}
+
 type PullRequest = {
   number: number;
   url: string;
@@ -167,27 +188,7 @@ export default function minimalFooter(pi: ExtensionAPI) {
   let workTimer: ReturnType<typeof setInterval> | undefined;
   let refreshRepositoryStatus: (() => void) | undefined;
 
-  function formatDuration(ms: number): string {
-    if (ms < 1_000) return `${Math.max(1, Math.round(ms))}ms`;
-    if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
-    const minutes = Math.floor(ms / 60_000);
-    const seconds = Math.floor((ms % 60_000) / 1_000);
-    return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
-  }
-
-  // Live counter format: whole seconds, like Claude Code's working timer.
-  function formatElapsed(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1_000);
-    if (totalSeconds < 60) return `${totalSeconds}s`;
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
-  }
-
-  const isOpenAIModel = (provider: string | undefined) =>
-    provider === "openai" || provider === "openai-codex";
-
-  const updateFastStatus = (ctx: any) => {
+  const updateFastStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
     ctx.ui.setStatus(
       "minimal-footer-fast-mode",
