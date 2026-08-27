@@ -7,41 +7,71 @@
  * Features:
  * - /plan command or Shift+Tab to toggle
  * - Bash restricted to allowlisted read-only commands
- * - Extracts numbered plan steps from "Plan:" sections
- * - Hands accepted plans to the rpiv-todo tool for execution tracking
+ * - Plans are delivered via the propose_plan tool (structured steps, no text parsing)
+ * - Approval dialog runs inside the tool call; approval restores tools and
+ *   execution continues in the same run with rpiv-todo progress tracking
  */
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
-import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Markdown, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { extractPlanStepSources, isSafeCommand } from "./utils.ts";
+import type { TextContent } from "@earendil-works/pi-ai";
+import {
+	getMarkdownTheme,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Markdown,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	type Component,
+} from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { isSafeCommand } from "./utils.ts";
 
 // Tools
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write", "todo"];
+const PLAN_MODE_TOOLS = [
+	"read",
+	"bash",
+	"grep",
+	"find",
+	"ask_user_question",
+	"web_search",
+	"propose_plan",
+];
+const NORMAL_MODE_TOOLS = [
+	"read",
+	"bash",
+	"grep",
+	"find",
+	"edit",
+	"write",
+	"todo",
+	"ask_user_question",
+	"web_search",
+];
 const PLAN_MODE_DISABLED_TOOLS = new Set<string>(["edit", "write", "todo"]);
-const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS, "todo"]);
+const PLAN_MANAGED_TOOLS = new Set<string>([...PLAN_MODE_TOOLS, ...NORMAL_MODE_TOOLS]);
 
-interface PlanCardItem {
-	step: number;
-	markdown: string;
-}
+const CHOICE_EXECUTE = "Execute the plan (track progress)";
+const CHOICE_STAY = "Stay in plan mode";
+const CHOICE_SAVE = "Save plan to PLAN.md";
 
-interface PlanCardData {
-	items: PlanCardItem[];
+// Legacy card entries from the pre-tool version of this extension
+interface LegacyPlanCardData {
+	items?: { step: number; markdown: string }[];
 }
 
 interface PlanModeState {
 	enabled: boolean;
 	toolsBeforePlanMode?: string[];
-	cardItems?: PlanCardItem[];
 }
 
-interface PendingPlan {
-	cardItems: PlanCardItem[];
+interface ProposePlanDetails {
+	steps: string[];
+	choice: "execute" | "stay" | "save" | null;
 }
 
 type CustomTypedMessage = AgentMessage & { customType?: string };
@@ -50,35 +80,61 @@ function customTypeOf(m: AgentMessage): string | undefined {
 	return (m as CustomTypedMessage).customType;
 }
 
-// Type guard for assistant messages
-function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
-	return m.role === "assistant" && Array.isArray(m.content);
-}
+type ThemeLike = {
+	fg(color: string, text: string): string;
+	bg(color: string, text: string): string;
+};
 
-// Extract text content from an assistant message
-function getTextContent(message: AssistantMessage): string {
-	return message.content
-		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text)
-		.join("\n");
-}
-
-function extractPendingPlan(sourceText: string): PendingPlan | undefined {
-	const sources = extractPlanStepSources(sourceText);
-	if (sources.length === 0) return undefined;
+// Bordered PLAN card used for propose_plan calls and legacy session entries
+function createPlanCard(steps: string[], theme: ThemeLike): Component {
+	const planAccent = (text: string) => theme.fg("thinkingHigh", text);
+	const title = " PLAN ";
+	const markdownItems = steps.map(
+		(step, index) => new Markdown(`${index + 1}. ${step}`, 0, 0, getMarkdownTheme()),
+	);
 
 	return {
-		cardItems: sources.map((markdown, index) => ({
-			step: index + 1,
-			markdown,
-		})),
+		invalidate() {
+			for (const item of markdownItems) item.invalidate();
+		},
+		render(width: number): string[] {
+			const cardWidth = Math.min(width, 100);
+			if (cardWidth < 5) {
+				return [truncateToWidth(planAccent("PLAN"), cardWidth, "")];
+			}
+
+			const topBorder =
+				cardWidth >= visibleWidth(title) + 3
+					? `╭─${title}${"─".repeat(cardWidth - visibleWidth(title) - 3)}╮`
+					: `╭${"─".repeat(cardWidth - 2)}╮`;
+			const bottomBorder = `╰${"─".repeat(cardWidth - 2)}╯`;
+			const contentWidth = cardWidth - 4;
+			const lines: string[] = [planAccent(topBorder)];
+
+			const addContentLine = (content: string): void => {
+				const fitted = truncateToWidth(content, contentWidth, "");
+				const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
+				lines.push(
+					planAccent("│") +
+						theme.bg("customMessageBg", ` ${fitted}${padding} `) +
+						planAccent("│"),
+				);
+			};
+
+			addContentLine("");
+			for (const [itemIndex, item] of markdownItems.entries()) {
+				if (itemIndex > 0) addContentLine("");
+				for (const line of item.render(contentWidth)) addContentLine(line);
+			}
+			addContentLine("");
+			lines.push(planAccent(bottomBorder));
+			return lines;
+		},
 	};
 }
 
 export default function planModeExtension(pi: ExtensionAPI): void {
 	let planModeEnabled = false;
-	let planCardItems: PlanCardItem[] = [];
-	let pendingPlan: PendingPlan | undefined;
 	let toolsBeforePlanMode: string[] | undefined;
 
 	pi.registerFlag("plan", {
@@ -87,53 +143,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		default: false,
 	});
 
-	pi.registerEntryRenderer<PlanCardData>("plan-todo-list", (entry, _options, theme): Component => {
-		const items = entry.data?.items ?? [];
-		const planAccent = (text: string) => theme.fg("thinkingHigh", text);
-		const title = " PLAN ";
-		const markdownItems = items.map(
-			(item) => new Markdown(`${item.step}. ${item.markdown}`, 0, 0, getMarkdownTheme()),
-		);
-
-		return {
-			invalidate() {
-				for (const item of markdownItems) item.invalidate();
-			},
-			render(width: number): string[] {
-				const cardWidth = Math.min(width, 100);
-				if (cardWidth < 5) {
-					return [truncateToWidth(planAccent("PLAN"), cardWidth, "")];
-				}
-
-				const topBorder =
-					cardWidth >= visibleWidth(title) + 3
-						? `╭─${title}${"─".repeat(cardWidth - visibleWidth(title) - 3)}╮`
-						: `╭${"─".repeat(cardWidth - 2)}╮`;
-				const bottomBorder = `╰${"─".repeat(cardWidth - 2)}╯`;
-				const contentWidth = cardWidth - 4;
-				const lines: string[] = [planAccent(topBorder)];
-
-				const addContentLine = (content: string): void => {
-					const fitted = truncateToWidth(content, contentWidth, "");
-					const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
-					lines.push(
-						planAccent("│") +
-							theme.bg("customMessageBg", ` ${fitted}${padding} `) +
-							planAccent("│"),
-					);
-				};
-
-				addContentLine("");
-				for (const [itemIndex, item] of markdownItems.entries()) {
-					if (itemIndex > 0) addContentLine("");
-					for (const line of item.render(contentWidth)) addContentLine(line);
-				}
-				addContentLine("");
-				lines.push(planAccent(bottomBorder));
-				return lines;
-			},
-		};
-	});
+	// Render plan cards persisted by the pre-tool version of this extension
+	pi.registerEntryRenderer<LegacyPlanCardData>("plan-todo-list", (entry, _options, theme) =>
+		createPlanCard((entry.data?.items ?? []).map((item) => item.markdown), theme),
+	);
 
 	function updateStatus(ctx: ExtensionContext): void {
 		ctx.ui.setStatus(
@@ -172,22 +185,22 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		toolsBeforePlanMode = undefined;
 	}
 
-	function appendPlanCard(cards: PlanCardItem[]): void {
-		pi.appendEntry<PlanCardData>("plan-todo-list", { items: cards });
-	}
-
 	function persistState(): void {
 		pi.appendEntry("plan-mode", {
 			enabled: planModeEnabled,
 			toolsBeforePlanMode,
-			cardItems: planCardItems,
-		});
+		} satisfies PlanModeState);
+	}
+
+	function exitPlanMode(ctx: ExtensionContext): void {
+		planModeEnabled = false;
+		restoreNormalModeTools();
+		updateStatus(ctx);
+		persistState();
 	}
 
 	function togglePlanMode(ctx: ExtensionContext): void {
 		planModeEnabled = !planModeEnabled;
-		planCardItems = [];
-		pendingPlan = undefined;
 
 		if (planModeEnabled) {
 			enablePlanModeTools();
@@ -210,6 +223,128 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
+	// Plans are delivered through this tool instead of being parsed out of text.
+	pi.registerTool({
+		name: "propose_plan",
+		label: "Propose Plan",
+		description:
+			"Present your finished implementation plan to the user for approval. " +
+			"Provide the ordered list of steps as markdown strings (each may span multiple lines). " +
+			"The result tells you whether the user approved the plan (execute it immediately), " +
+			"wants to keep planning, or saved it for later.",
+		promptSnippet: "Present a finished implementation plan for user approval (plan mode)",
+		promptGuidelines: [
+			"In plan mode, deliver finished plans by calling propose_plan with the full ordered step list. Never print a plan as plain text.",
+		],
+		parameters: Type.Object({
+			steps: Type.Array(
+				Type.String({ description: "One plan step as markdown; may span multiple lines" }),
+				{ minItems: 1, description: "Ordered implementation steps" },
+			),
+		}),
+		executionMode: "sequential",
+
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			if (!planModeEnabled) {
+				throw new Error("propose_plan is only available in plan mode. Use /plan to enable it.");
+			}
+
+			const steps = params.steps.map((step) => step.trim()).filter((step) => step.length > 0);
+			if (steps.length === 0) {
+				throw new Error("Plan must contain at least one non-empty step.");
+			}
+
+			// End the turn without approval; the user stays in plan mode.
+			const stayResult = (text: string, choice: ProposePlanDetails["choice"] = null) => ({
+				content: [{ type: "text" as const, text }],
+				details: { steps, choice } satisfies ProposePlanDetails,
+				terminate: true,
+			});
+
+			if (!ctx.hasUI) {
+				return stayResult("Plan recorded. No UI is available for approval; staying in plan mode.");
+			}
+
+			const choice = await ctx.ui.select("Plan proposed - what next?", [
+				CHOICE_EXECUTE,
+				CHOICE_STAY,
+				CHOICE_SAVE,
+			]);
+
+			if (signal?.aborted) {
+				return stayResult("Cancelled.");
+			}
+
+			if (choice === CHOICE_EXECUTE) {
+				exitPlanMode(ctx);
+				return {
+					content: [
+						{
+							type: "text",
+							text: `The user approved the plan. Plan mode is now OFF and full tool access is restored.
+
+Execute the plan now. First call todo with action "create" once for each plan step, preserving the same order and meaning. Then work on exactly one task at a time: mark it in_progress before starting and completed immediately after it is fully verified. Start with step 1.`,
+						},
+					],
+					details: { steps, choice: "execute" } satisfies ProposePlanDetails,
+				};
+			}
+
+			if (choice === CHOICE_SAVE) {
+				const planPath = join(ctx.cwd, "PLAN.md");
+				const content = `# Plan\n\n${steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}\n`;
+				try {
+					writeFileSync(planPath, content, "utf8");
+					ctx.ui.notify(`Plan saved to ${planPath}`, "info");
+					return stayResult(
+						`Plan saved to ${planPath}. Still in plan mode; wait for further instructions.`,
+						"save",
+					);
+				} catch (error) {
+					throw new Error(
+						`Failed to save plan: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
+
+			// "Stay in plan mode" or dialog dismissed
+			return stayResult(
+				"The user did not approve the plan yet and wants to keep planning. Stay in plan mode and wait for their feedback.",
+				choice === CHOICE_STAY ? "stay" : null,
+			);
+		},
+
+		renderCall(args, theme) {
+			const steps = Array.isArray(args?.steps)
+				? args.steps.filter((step): step is string => typeof step === "string")
+				: [];
+			if (steps.length === 0) {
+				return new Text(theme.fg("toolTitle", theme.bold("propose_plan")), 0, 0);
+			}
+			return createPlanCard(steps, theme);
+		},
+
+		renderResult(result, _options, theme) {
+			const details = result.details as ProposePlanDetails | undefined;
+			switch (details?.choice) {
+				case "execute":
+					return new Text(theme.fg("success", "✓ Approved - executing"), 0, 0);
+				case "save":
+					return new Text(theme.fg("success", "✓ Saved to PLAN.md"), 0, 0);
+				case "stay":
+					return new Text(theme.fg("warning", "⏸ Still planning"), 0, 0);
+				default: {
+					const text = result.content[0];
+					return new Text(
+						theme.fg("muted", text?.type === "text" ? text.text : "No decision"),
+						0,
+						0,
+					);
+				}
+			}
+		},
+	});
+
 	// Block destructive bash commands in plan mode
 	pi.on("tool_call", async (event) => {
 		if (!planModeEnabled || event.toolName !== "bash") return;
@@ -223,22 +358,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	// Deduplicate plan mode context while active; strip it entirely when inactive
+	// Strip plan mode context once inactive. While active, injections are left
+	// append-only: each copy is small, and removing older copies mid-transcript
+	// would invalidate the prompt cache prefix on every planning turn.
 	pi.on("context", async (event) => {
-		if (planModeEnabled) {
-			// Keep only the most recent plan-mode context injection to save tokens.
-			let lastContextIndex = -1;
-			for (let i = event.messages.length - 1; i >= 0; i--) {
-				if (customTypeOf(event.messages[i]) === "plan-mode-context") {
-					lastContextIndex = i;
-					break;
-				}
-			}
-			const messages = event.messages.filter(
-				(m, index) => customTypeOf(m) !== "plan-mode-context" || index === lastContextIndex,
-			);
-			return messages.length === event.messages.length ? undefined : { messages };
-		}
+		if (planModeEnabled) return;
 
 		return {
 			messages: event.messages.filter((m) => {
@@ -259,136 +383,31 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		};
 	});
 
-	// Inject plan context before the agent starts
+	// Inject plan mode instructions before the agent starts
 	pi.on("before_agent_start", async () => {
-		if (planModeEnabled) {
-			const currentPlan =
-				planCardItems.length > 0
-					? `\n\nCurrent plan available for refinement:\n${planCardItems
-							.map((item) => `${item.step}. ${item.markdown}`)
-							.join("\n")}`
-					: "";
-			return {
-				message: {
-					customType: "plan-mode-context",
-					content: `[PLAN MODE ACTIVE]
+		if (!planModeEnabled) return;
+
+		return {
+			message: {
+				customType: "plan-mode-context",
+				content: `[PLAN MODE ACTIVE]
 You are in plan mode - a read-only exploration mode for safe code analysis.
 
 Restrictions:
-- Built-in edit and write tools are disabled
-- Other currently active tools remain available
+- Built-in edit, write, and todo tools are disabled
 - Bash is restricted to an allowlist of read-only commands
+- Do NOT attempt to make changes
 
-Ask clarifying questions using the questionnaire tool.
-Use brave-search skill via bash for web research.
+Explore the codebase and design an implementation plan. Ask clarifying questions using the ask_user_question tool. Use the web_search tool for web research.
 
-Create a detailed numbered plan under a "Plan:" header:
-
-Plan:
-1. First step description
-2. Second step description
-...
-
-Do NOT attempt to make changes - just describe what you would do.${currentPlan}`,
-					display: false,
-				},
-			};
-		}
-	});
-
-	// Capture completed plans before rendering so the unboxed assistant text can
-	// be replaced by the bordered card without losing the full plan content.
-	pi.on("message_end", async (event, ctx) => {
-		// Without a UI there is no card to replace the text, so leave the plan visible.
-		if (!ctx.hasUI || !planModeEnabled || !isAssistantMessage(event.message)) return;
-
-		const extracted = extractPendingPlan(getTextContent(event.message));
-		if (!extracted) return;
-
-		pendingPlan = extracted;
-		return {
-			message: {
-				...event.message,
-				content: event.message.content.map((block) =>
-					block.type === "text" ? { ...block, text: "" } : block,
-				),
+When your plan is ready, call the propose_plan tool with the ordered list of steps. Never write the plan as plain text - always deliver it via propose_plan.`,
+				display: false,
 			},
 		};
 	});
 
-	// Handle plan completion and plan mode UI
-	pi.on("agent_end", async (event, ctx) => {
-		if (!planModeEnabled || !ctx.hasUI) return;
-
-		// Use the plan captured before display replacement, with a fallback for
-		// modes where message replacement is unavailable. Do not reuse a stale plan
-		// when a response does not contain a new one.
-		let nextPlan: PendingPlan | undefined;
-		if (pendingPlan) {
-			nextPlan = pendingPlan;
-			pendingPlan = undefined;
-		} else {
-			const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
-			if (lastAssistant) nextPlan = extractPendingPlan(getTextContent(lastAssistant));
-		}
-
-		if (!nextPlan) return;
-		planCardItems = nextPlan.cardItems;
-		persistState();
-
-		appendPlanCard(nextPlan.cardItems);
-
-		const choice = await ctx.ui.select("Plan mode - what next?", [
-			"Execute the plan (track progress)",
-			"Stay in plan mode",
-			"Refine the plan",
-			"Save plan to PLAN.md",
-		]);
-
-		if (choice?.startsWith("Execute")) {
-			const firstPlanItem = nextPlan.cardItems[0];
-			if (!firstPlanItem) return;
-
-			planModeEnabled = false;
-			restoreNormalModeTools();
-			planCardItems = [];
-			updateStatus(ctx);
-			persistState();
-
-			const planList = nextPlan.cardItems.map((item) => `${item.step}. ${item.markdown}`).join("\n");
-			const execMessage = `Execute the plan below using the todo tool for progress tracking.
-
-Plan:
-${planList}
-
-Before implementation, call todo with action "create" once for each numbered plan step, preserving the same order and meaning. Then work on exactly one task at a time: mark it in_progress before starting and completed immediately after it is fully verified. Do not use [DONE:n] markers. Start with step 1: ${firstPlanItem.markdown}`;
-			pi.sendMessage(
-				{ customType: "plan-mode-execute", content: execMessage, display: false },
-				{ triggerTurn: true, deliverAs: "followUp" },
-			);
-		} else if (choice === "Refine the plan") {
-			// Return to the main composer instead of the text-only dialog so the
-			// refinement can include images pasted from the clipboard.
-			ctx.ui.setEditorText("Refine the plan using this feedback:\n\n");
-			ctx.ui.notify("Refinement ready. Add text or paste images, then submit.", "info");
-		} else if (choice === "Save plan to PLAN.md") {
-			const planPath = join(ctx.cwd, "PLAN.md");
-			const content = `# Plan\n\n${nextPlan.cardItems.map((item) => `${item.step}. ${item.markdown}`).join("\n")}\n`;
-			try {
-				writeFileSync(planPath, content, "utf8");
-				ctx.ui.notify(`Plan saved to ${planPath}`, "info");
-			} catch (error) {
-				ctx.ui.notify(`Failed to save plan: ${error instanceof Error ? error.message : String(error)}`, "error");
-			}
-		}
-	});
-
 	// Restore state on session start/resume
 	pi.on("session_start", async (_event, ctx) => {
-		if (pi.getFlag("plan") === true) {
-			planModeEnabled = true;
-		}
-
 		type SessionEntryLike = { type: string; customType?: string };
 		const entries = ctx.sessionManager.getEntries();
 
@@ -400,11 +419,19 @@ Before implementation, call todo with action "create" once for each numbered pla
 		if (planModeEntry?.data) {
 			planModeEnabled = planModeEntry.data.enabled ?? planModeEnabled;
 			toolsBeforePlanMode = planModeEntry.data.toolsBeforePlanMode ?? toolsBeforePlanMode;
-			planCardItems = planModeEntry.data.cardItems ?? planCardItems;
+		}
+
+		// The flag wins over persisted state so `pi --plan` always starts planning
+		if (pi.getFlag("plan") === true) {
+			planModeEnabled = true;
 		}
 
 		if (planModeEnabled) {
 			enablePlanModeTools();
+		} else {
+			// pi auto-activates newly registered tools, so without this propose_plan
+			// would be live (and in the system prompt) outside plan mode.
+			pi.setActiveTools(pi.getActiveTools().filter((name) => name !== "propose_plan"));
 		}
 		updateStatus(ctx);
 	});

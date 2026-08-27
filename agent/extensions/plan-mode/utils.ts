@@ -19,8 +19,6 @@ const DESTRUCTIVE_PATTERNS = [
 	/\btruncate\b/i,
 	/\bdd\b/i,
 	/\bshred\b/i,
-	/(^|[^<])>(?!>)/,
-	/>>/,
 	/\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
 	/\byarn\s+(add|remove|install|publish)/i,
 	/\bpnpm\s+(add|remove|install|publish)/i,
@@ -38,11 +36,14 @@ const DESTRUCTIVE_PATTERNS = [
 	/\bsystemctl\s+(start|stop|restart|enable|disable)/i,
 	/\bservice\s+\S+\s+(start|stop|restart)/i,
 	/\b(vim?|nano|emacs|code|subl)\b/i,
+	// find flags that delete files, run commands, or write output files
+	/\bfind\b.*\s-(delete|exec|execdir|ok|okdir|fls|fprint0?|fprintf)\b/i,
 ];
 
 // Safe read-only commands allowed in plan mode
 const SAFE_PATTERNS = [
 	/^\s*cat\b/,
+	/^\s*cd\b/,
 	/^\s*head\b/,
 	/^\s*tail\b/,
 	/^\s*less\b/,
@@ -94,38 +95,88 @@ const SAFE_PATTERNS = [
 	/^\s*eza\b/,
 ];
 
-export function isSafeCommand(command: string): boolean {
-	// Stderr-only redirects don't write files; other redirects stay blocked.
-	const normalized = command.replace(/2>\s*\/dev\/null|2>&1/g, "");
-	const isDestructive = DESTRUCTIVE_PATTERNS.some((p) => p.test(normalized));
-	const isSafe = SAFE_PATTERNS.some((p) => p.test(normalized));
-	return !isDestructive && isSafe;
-}
+/**
+ * Quote-aware scan of a shell command, in the spirit of Claude Code's bash
+ * permission checks: compound commands are split on unquoted operators
+ * (`;`, `|`, `&`, newline) so each segment can be validated independently.
+ * Returns null when the command cannot be statically verified - command
+ * substitution, process substitution, or output redirection. Stderr-only
+ * redirects (`2>/dev/null`, `2>&1`) are allowed.
+ */
+function splitCommandSegments(command: string): string[] | null {
+	// Stderr-only redirects don't write files; strip before scanning.
+	const normalized = command.replace(/2>\s*\/dev\/null/g, " ").replace(/2>&1/g, " ");
 
-export function cleanStepText(text: string): string {
-	return text
-		.replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1") // Remove bold/italic markers
-		.replace(/`([^`]+)`/g, "$1") // Remove inline-code markers
-		.replace(/\s+/g, " ")
-		.trim();
-}
+	const segments: string[] = [];
+	let current = "";
+	let state: "normal" | "single" | "double" = "normal";
+	let escaped = false;
 
-export function extractPlanStepSources(message: string): string[] {
-	const headerMatch = message.match(/\*{0,2}Plan:\*{0,2}\s*\n/i);
-	if (!headerMatch) return [];
+	const endSegment = () => {
+		const trimmed = current.trim();
+		if (trimmed.length > 0) segments.push(trimmed);
+		current = "";
+	};
 
-	const planSection = message.slice(message.indexOf(headerMatch[0]) + headerMatch[0].length);
-	const numberedPattern = /^\s*\d+[.)]\s+(.+?)\s*$/gm;
-	const steps: string[] = [];
+	for (let i = 0; i < normalized.length; i++) {
+		const char = normalized[i];
+		const next = normalized[i + 1];
 
-	for (const match of planSection.matchAll(numberedPattern)) {
-		const source = match[1].trim();
-		const cleaned = cleanStepText(source);
-		// Skip stray slash commands and list continuation markers, but keep steps
-		// that begin with file references or other formatted content.
-		if (cleaned.length > 0 && !cleaned.startsWith("/") && !cleaned.startsWith("-")) {
-			steps.push(source);
+		if (escaped) {
+			current += char;
+			escaped = false;
+			continue;
 		}
+		if (char === "\\" && state !== "single") {
+			current += char;
+			escaped = true;
+			continue;
+		}
+
+		if (state === "single") {
+			if (char === "'") state = "normal";
+			current += char;
+			continue;
+		}
+
+		// Command substitution executes code, even inside double quotes.
+		if (char === "`" || (char === "$" && next === "(")) return null;
+
+		if (state === "double") {
+			if (char === '"') state = "normal";
+			current += char;
+			continue;
+		}
+
+		if (char === "'" || char === '"') {
+			state = char === "'" ? "single" : "double";
+			current += char;
+			continue;
+		}
+
+		// Output redirection writes files; process substitution executes code.
+		if (char === ">") return null;
+		if (char === "<" && next === "(") return null;
+
+		if (char === ";" || char === "|" || char === "&" || char === "\n") {
+			endSegment();
+			continue;
+		}
+
+		current += char;
 	}
-	return steps;
+	endSegment();
+	return segments;
+}
+
+export function isSafeCommand(command: string): boolean {
+	const segments = splitCommandSegments(command);
+	if (segments === null || segments.length === 0) return false;
+
+	// Every segment of a pipeline or command list must be allowlisted.
+	return segments.every(
+		(segment) =>
+			SAFE_PATTERNS.some((pattern) => pattern.test(segment)) &&
+			!DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(segment)),
+	);
 }
