@@ -12,6 +12,7 @@ Machine-specific state is intentionally excluded:
 
 - API credentials (`agent/auth.json`)
 - trusted-project decisions (`agent/trust.json`)
+- generated model catalog cache (`agent/models-store.json`)
 - installed packages (`agent/npm/`)
 - session transcripts (`agent/sessions/`)
 

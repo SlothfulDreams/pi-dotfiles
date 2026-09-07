@@ -1,6 +1,7 @@
 # Secrets and machine-local state
 agent/auth.json
 agent/trust.json
+agent/models-store.json
 web-search.json
 
 # Installed packages and session transcripts
