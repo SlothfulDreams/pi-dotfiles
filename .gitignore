@@ -10,6 +10,9 @@ agent/fff/
 agent/git/
 web-search-cache/
 
+# Emil skills
+/agent/skills/emil-*/
+
 # Local environment files
 .env
 .env.*
