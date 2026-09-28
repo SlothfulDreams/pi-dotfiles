@@ -1,14 +1,15 @@
 {
-  "lastChangelogVersion": "0.85.0",
+  "lastChangelogVersion": "0.87.1",
   "theme": "github-dark-default",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "high",
   "enabledModels": [
-    "anthropic/claude-opus-5",
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-fable-5-1",
     "openai-codex/gpt-6-astra",
-    "openai-codex/gpt-5.6-luna",
-    "anthropic/claude-fable-5"
+    "openai-codex/gpt-6-luna",
+    "openai-codex/gpt-6-sol"
   ],
   "packages": [
     "npm:pi-web-access",
@@ -18,7 +19,12 @@
     "npm:@juicesharp/rpiv-ask-user-question",
     "npm:@juicesharp/rpiv-todo",
     "npm:@juicesharp/rpiv-btw",
-    "git:github.com/paoloanzn/pi-black"
+    "git:github.com/paoloanzn/pi-black",
+    "../../Documents/pi-diff",
+    "npm:pi-mcp-adapter",
+    "npm:pi-subagents",
+    "npm:@aliou/pi-processes",
+    "npm:pi-intercom"
   ],
   "compaction": {
     "enabled": true,

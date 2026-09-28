@@ -10,6 +10,10 @@ agent/sessions/
 agent/fff/
 agent/git/
 web-search-cache/
+agent/intercom/
+agent/missions/
+agent/mcp-cache.json
+agent/mcp-project-approvals.json
 
 # Emil skills
 /agent/skills/emil-*/

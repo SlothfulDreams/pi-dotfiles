@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/@aliou/pi-processes@0.12.0/schema.json",
+  "widget": {
+    "showStatusWidget": true
+  },
+  "interception": {
+    "blockBackgroundCommands": true
+  },
+  "version": "0.10.6"
+}
