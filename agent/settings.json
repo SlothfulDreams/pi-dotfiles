@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.87.1",
+  "lastChangelogVersion": "0.99.1",
   "theme": "github-dark-default",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5-5",
@@ -21,7 +21,6 @@
     "npm:@juicesharp/rpiv-btw",
     "git:github.com/paoloanzn/pi-black",
     "../../Documents/pi-diff",
-    "npm:pi-mcp-adapter",
     "npm:pi-subagents",
     "npm:@aliou/pi-processes",
     "npm:pi-intercom"
