@@ -28,3 +28,6 @@ agent/mcp-project-approvals.json
 .idea/
 .vscode/
 *.swp
+
+# pi-subagents runtime state
+agent/pi-subagents/
