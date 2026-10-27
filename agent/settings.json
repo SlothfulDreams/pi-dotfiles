@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.3.0",
+  "lastChangelogVersion": "1.4.0",
   "theme": "github-dark-default",
   "defaultProvider": "anthropic",
   "defaultModel": "claude-opus-5-5",
@@ -9,11 +9,11 @@
   ],
   "enabledModels": [
     "anthropic/claude-opus-5-5",
-    "anthropic/claude-fable-5-1",
     "openai-codex/gpt-6-astra",
     "openai-codex/gpt-6-luna",
     "openai-codex/gpt-6-sol",
-    "xai/grok-4.7"
+    "xai/grok-4.7",
+    "anthropic/claude-fable-5-1"
   ],
   "packages": [
     "npm:pi-web-access",
@@ -24,7 +24,6 @@
     "npm:@juicesharp/rpiv-todo",
     "npm:@juicesharp/rpiv-btw",
     "git:github.com/paoloanzn/pi-black",
-    "../../Documents/pi-diff",
     "npm:pi-subagents",
     "npm:@aliou/pi-processes",
     "npm:pi-intercom",
